@@ -1,0 +1,4 @@
+*.o
+shiritori
+shiritori_server
+*~
