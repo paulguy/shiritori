@@ -7,12 +7,13 @@
 #include <unistd.h>
 #include <string.h>
 #include <signal.h>
+#include <time.h>
 
 #include "net.h"
 
 #define MAX_USERS (8)
 #define TIMEOUT (60)
-#define MAX_READ (1024)
+#define MAX_READ (1048576)
 
 Server *s;
 void signalhandler(int signum);
@@ -23,6 +24,7 @@ int main(int argc, char *argv[]) {
 	int retval;
 	int i;
 	struct sigaction sa;
+	struct timespec idletime;
 
 	if (argc != 2) {
 		fprintf(stderr, "Usage: %s <port>\n", argv[0]);
@@ -47,8 +49,8 @@ int main(int argc, char *argv[]) {
 		exit(EXIT_FAILURE);
 	}
 
+	idletime.tv_sec = 0;
 	running = 1;
-
 	while(running) {
 		retval = connection_accept(s);
 		if(retval >= 0)
@@ -68,11 +70,15 @@ int main(int argc, char *argv[]) {
 					fprintf(stderr, "Connection %i timed out.\n", i);
 				} else if(retval > 0) {
 					readbuf[retval] = '\0';
-					fprintf(stderr, "%i(%i): %s", i, retval, readbuf);
+					//fprintf(stderr, "%i(%i): %s", i, retval, readbuf);
+					//fprintf(stderr, "TECHNO ");
 					connection_write(s->connection[i], readbuf, retval);
 				}
 			}
 		}
+
+		idletime.tv_nsec = 1000000;
+		nanosleep(&idletime, NULL);
 	}
 
 	server_free(s);
