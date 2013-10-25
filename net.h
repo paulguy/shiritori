@@ -1,4 +1,4 @@
-#define BUF_SIZE 1024
+#include <sys/socket.h>
 
 typedef enum {
 	NOTCONNECTED, SERVER, CLIENT
@@ -6,20 +6,21 @@ typedef enum {
 
 typedef struct {
 	int sock;
-	char *buf;
-	int buffersize;
-	int bufferstart;
-	int bufferend;
 
 	connection_type type;
 	char *hostname;
 	struct sockaddr address;
+
+	time_t timeout;
+	time_t last_message;
 } Connection;
 
 typedef struct {
 	int sock;
-	int nconnections;
-	Connection *connection;
+	int connections;
+	Connection **connection;
+
+	time_t timeout;
 } Server;
 
 /*
@@ -51,7 +52,7 @@ void connection_disconnect(Connection *c);
  *
  * returns		New Server structure or NULL on error.
  */
-Server *server_init(int port, int max_users);
+Server *server_init(char *port, int max_users, int timeout);
 
 /*
  * Close server and all connections, then free all resources associated with a server.
@@ -79,7 +80,7 @@ void server_close_all(Server *s);
  *
  * s		Server to accept a connection on.
  *
- * returns	1 on new connection, 0 on no new connection, -1 on max connections reached, -2 on accept() failure.
+ * returns	The number of the connection (index in to connections[]) on new connection, -1 on error, -2 on no new connection.
  */
 int connection_accept(Server *s);
 
@@ -91,3 +92,26 @@ int connection_accept(Server *s);
  * returns	0 on success, -1 on failure.
  */
 int fd_nonblocking(int fd);
+
+/*
+ * Read data from a socket.  On error or timeout, connection is closed.
+ *
+ * c		Connection to read data from.
+ * buf		buffer to write data in to.
+ * bytes	amount of bytes to read.
+ *
+ * return	amount of bytes read or 0 if nothing to read or -1 on error, -2 on timeout.
+ */
+int connection_read(Connection *c, char *buf, int bytes);
+
+/*
+ * Write data to a socket. (Wraps write)
+ *
+ * c		Connection to write data to.
+ * buf		buffer to read data from.
+ * bytes	amount of bytes to write.
+ *
+ * return	amount of bytes read or 0 if nothing to read or -1 on error, -2 on timeout.
+ */
+int connection_write(Connection *c, char *buf, int bytes);
+

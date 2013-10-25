@@ -1,84 +1,86 @@
 #include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <netdb.h>
+#include <signal.h>
 
-#define BUF_SIZE 500
+#include "net.h"
+
+#define MAX_USERS (8)
+#define TIMEOUT (60)
+#define MAX_READ (1024)
+
+Server *s;
+void signalhandler(int signum);
 
 int main(int argc, char *argv[]) {
-	struct addrinfo hints;
-	struct addrinfo *result, *rp;
-	int sfd, s;
-	struct sockaddr_storage peer_addr;
-	socklen_t peer_addr_len;
-	ssize_t nread;
-	char buf[BUF_SIZE];
+	char readbuf[MAX_READ + 1];
+	int running;
+	int retval;
+	int i;
+	struct sigaction sa;
 
 	if (argc != 2) {
-		fprintf(stderr, "Usage: %s port\n", argv[0]);
+		fprintf(stderr, "Usage: %s <port>\n", argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
-	memset(&hints, 0, sizeof(struct addrinfo));
-	hints.ai_family = AF_UNSPEC;    /* Allow IPv4 or IPv6 */
-	hints.ai_socktype = SOCK_DGRAM; /* Datagram socket */
-	hints.ai_flags = AI_PASSIVE;    /* For wildcard IP address */
-	hints.ai_protocol = 0;          /* Any protocol */
-	hints.ai_canonname = NULL;
-	hints.ai_addr = NULL;
-	hints.ai_next = NULL;
+	sa.sa_handler = signalhandler;
+	sigemptyset(&(sa.sa_mask));
+	sa.sa_flags = 0;
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGQUIT, &sa, NULL);
+	sigaction(SIGPIPE, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
+	sa.sa_handler = SIG_IGN;
+	sigaction(SIGHUP, &sa, NULL);
+	sigaction(SIGUSR1, &sa, NULL);
+	sigaction(SIGUSR2, &sa, NULL);
 
-	s = getaddrinfo(NULL, argv[1], &hints, &result);
-	if (s != 0) {
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(s));
+	s = server_init(argv[1], MAX_USERS, TIMEOUT);
+	if(s == NULL) {
+		fprintf(stderr, "main(): couldn't initialize server.\n");
 		exit(EXIT_FAILURE);
 	}
 
-	/* getaddrinfo() returns a list of address structures.
-	Try each address until we successfully bind(2).
-	If socket(2) (or bind(2)) fails, we (close the socket
-	and) try the next address. */
+	running = 1;
 
-	for (rp = result; rp != NULL; rp = rp->ai_next) {
-		sfd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-		if (sfd == -1)
-			continue;
+	while(running) {
+		retval = connection_accept(s);
+		if(retval >= 0)
+			fprintf(stderr, "New connection from %s.\n", inet_ntoa(((struct sockaddr_in *)&(s->connection[retval]->address))->sin_addr));
+		else if(retval == -1) {
+			fprintf(stderr, "Error accepting connection.\n");
+			server_free(s);
+			exit(EXIT_FAILURE);
+		}
 
-		if (bind(sfd, rp->ai_addr, rp->ai_addrlen) == 0)
-			break;                  /* Success */
-
-		close(sfd);
+		for(i = 0; i < s->connections; i++) {
+			if(s->connection[i]->type == CLIENT) {
+				retval = connection_read(s->connection[i], readbuf, MAX_READ);
+				if(retval == -1) {
+					fprintf(stderr, "Error reading from socket.\n");
+				} else if(retval == -2) {
+					fprintf(stderr, "Connection %i timed out.\n", i);
+				} else if(retval > 0) {
+					readbuf[retval] = '\0';
+					fprintf(stderr, "%i(%i): %s", i, retval, readbuf);
+					connection_write(s->connection[i], readbuf, retval);
+				}
+			}
+		}
 	}
 
-	if (rp == NULL) {               /* No address succeeded */
-		fprintf(stderr, "Could not bind\n");
-		exit(EXIT_FAILURE);
-	}
-
-	freeaddrinfo(result);           /* No longer needed */
-
-	/* Read datagrams and echo them back to sender */
-
-	for (;;) {
-		peer_addr_len = sizeof(struct sockaddr_storage);
-		nread = recvfrom(sfd, buf, BUF_SIZE, 0, (struct sockaddr *) &peer_addr, &peer_addr_len);
-		if (nread == -1)
-			continue;               /* Ignore failed request */
-
-		char host[NI_MAXHOST], service[NI_MAXSERV];
-
-		s = getnameinfo((struct sockaddr *) &peer_addr, peer_addr_len, host, 
-		                NI_MAXHOST, service, NI_MAXSERV, NI_NUMERICSERV);
-		if (s == 0)
-			printf("Received %ld bytes from %s:%s\n", (long) nread, host, service);
-		else
-			fprintf(stderr, "getnameinfo: %s\n", gai_strerror(s));
-
-		if (sendto(sfd, buf, nread, 0, (struct sockaddr *) &peer_addr, peer_addr_len) != nread)
-			fprintf(stderr, "Error sending response\n");
-	}
+	server_free(s);
+	exit(EXIT_SUCCESS);
 }
 
+void signalhandler(int signum) {
+	fprintf(stderr, "\n\nSignal %i received.\n", signum);
+	server_free(s);
+	exit(EXIT_SUCCESS);
+}

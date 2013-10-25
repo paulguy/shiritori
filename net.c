@@ -5,40 +5,34 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netdb.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <time.h>
 
 #include "net.h"
 
-connection *connection_init() {
-	connection *c;
+Connection *connection_init() {
+	Connection *c;
 
-	c = malloc(sizeof(connection));
+	c = malloc(sizeof(Connection));
 	if(c == NULL)
 		return(NULL);
-	c->buf = malloc(BUF_SIZE);
-	if(c->buf = NULL) {
-		free(c);
-		return(NULL);
-	}
 
 	c->sock = 0;
-	c->buffersize = BUF_SIZE;
-	c->bufferstart = 0;
-	c->bufferend = 0;
 	c->type = NOTCONNECTED;
 	c->hostname = NULL;
-	c->address = NULL;
+	memset(&(c->address), 0, sizeof(struct sockaddr));
 
 	return(c);
 }
 
-void connection_free(connection *c) {
-	connection_disconnect(connection *c);
+void connection_free(Connection *c) {
+	connection_disconnect(c);
 
-	free(c->buf);
 	free(c);
 }
 
-void connection_disconnect(connection *c) {
+void connection_disconnect(Connection *c) {
 	/* Don't close stdin/out/err */
 	if(c->sock > 2) {
 		close(c->sock);
@@ -47,15 +41,13 @@ void connection_disconnect(connection *c) {
 	}
 }
 
-Server *server_init(int port, int max_users) {
+Server *server_init(char *port, int max_users, int timeout) {
 	Server *s;
 	struct addrinfo hints;
 	struct addrinfo *result, *rp; // first item, current item in linked list
 	int retval;
-	int opts;
 	int i;
-	fd_set rfds;
-	struct timeval tv;
+	int yes = 1;
 
 	s = malloc(sizeof(Server));
 	if(s == NULL) {
@@ -72,7 +64,7 @@ Server *server_init(int port, int max_users) {
 	hints.ai_addr = NULL;
 	hints.ai_next = NULL;
 
-	retval = getaddrinfo(NULL, argv[1], &hints, &result);
+	retval = getaddrinfo(NULL, port, &hints, &result);
 	if (retval != 0) {
 		fprintf(stderr, "server_init(): getaddrinfo(): %s\n", gai_strerror(retval));
 		goto serror1;
@@ -87,7 +79,7 @@ Server *server_init(int port, int max_users) {
 		s->sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if (s->sock == -1)
 			continue;
-		if (bind(sfd, rp->ai_addr, rp->ai_addrlen) == 0) {
+		if (bind(s->sock, rp->ai_addr, rp->ai_addrlen) == 0)
 			break;
 	}
 
@@ -98,6 +90,12 @@ Server *server_init(int port, int max_users) {
 		goto serror2;
 	}
 
+	if (setsockopt(s->sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+		perror("server_init(): setsockopt()");
+		exit(1);
+	}
+
+	/* allocate memory for max connections */
 	s->connection = malloc(sizeof(Connection *) * max_users);
 	if(s->connection == NULL) {
 		fprintf(stderr, "server_init(): Couldn't allocate memory.\n");
@@ -108,6 +106,7 @@ Server *server_init(int port, int max_users) {
 		if(s->connection[i] == NULL)
 			break;
 	}
+	/* if not all connections could be allocated, free what has been */
 	if(i < max_users - 1 && i > 0) {
 		i--;
 		for(; i >= 0; i--) {
@@ -115,6 +114,8 @@ Server *server_init(int port, int max_users) {
 		}
 		goto serror3;
 	}
+	s->connections = max_users;
+	s->timeout = timeout;
 
 	/* Start listening */
 	if(listen(s->sock, 10) == -1) {
@@ -174,44 +175,87 @@ int connection_accept(Server *s) {
 	int i;
 
 	for(i = 0; i < s->connections; i++) {
-		if(s->connection[i]->type == NOTCONNECTED)
+		if(s->connection[i]->type == NOTCONNECTED) {
 			c = s->connection[i];
+			break;
 		}
 	}
-	if(i == s->connections)
+
+	if(i == s->connections) {
+		fprintf(stderr, "connection_accept(): Max connections reached.\n");
 		return(-1);
+	}
 
 	addrlen = sizeof(struct sockaddr);
 	sock = accept(s->sock, &(c->address), &addrlen);
 	if(sock < 0) {
 		if(errno == EAGAIN || errno == EWOULDBLOCK)
-			return(0);
+			return(-2);
 		else {
 			perror("connection_accept(): accept()");
-			return(-2);
+			return(-1);
 		}
 	}
 
-	/* update connection and reset buffer */
 	c->sock = sock;
 	c->type = CLIENT;
-	c->bufferstart = 0;
-	c->bufferend = 0;
+	c->timeout = s->timeout;
+	c->last_message = time(NULL);
 
-	return(1);
+	if(fd_nonblocking(c->sock)) {
+		fprintf(stderr, "connection_accept(): Couldn't make socket nonblocking.\n");
+		connection_disconnect(c);
+		return(-1);
+	}
+
+	return(i);
 }
 
 int fd_nonblocking(int fd) {
-	opts = fcntl(c->sock, F_GETFL);
+	int opts;
+
+	opts = fcntl(fd, F_GETFL);
 	if (opts < 0) {
 		perror("socket_nonblocking(): fcntl(F_GETFL)");
 		return(-1);
 	}
 	opts |= O_NONBLOCK;
-	if (fcntl(c->sock, F_SETFL, opts) < 0) {
+	if (fcntl(fd, F_SETFL, opts) < 0) {
 		perror("socket_nonblocking(): fcntl(F_SETFL)");
 		return(-1);
 	}
 
 	return(0);
+}
+
+int connection_read(Connection *c, char *buf, int bytes) {
+	int retval;
+
+	retval = read(c->sock, buf, bytes);
+
+	if(retval == 0) {
+		if(time(NULL) - c->last_message > c->timeout) {
+			connection_disconnect(c);
+			return(-2);
+		}
+		return(0);
+	} else if(retval > 0) {
+		c->last_message = time(NULL);
+		return(retval);
+	}
+	/* else */
+	if(errno == EAGAIN || errno == EWOULDBLOCK) {
+		if(time(NULL) - c->last_message > c->timeout) {
+			connection_disconnect(c);
+			return(-2);
+		}
+		return(0);
+	}
+
+	connection_disconnect(c);
+	return(-1);
+}
+
+int connection_write(Connection *c, char *buf, int bytes) {
+	return(write(c->sock, buf, bytes));
 }
