@@ -11,7 +11,7 @@
 
 #include "net.h"
 
-Connection *connection_init() {
+Connection *connection_init(int timeout) {
 	Connection *c;
 
 	c = malloc(sizeof(Connection));
@@ -21,6 +21,8 @@ Connection *connection_init() {
 	c->sock = 0;
 	c->type = NOTCONNECTED;
 	c->hostname = NULL;
+	c->timeout = timeout;
+	c->last_message = 0;
 	memset(&(c->address), 0, sizeof(struct sockaddr));
 
 	return(c);
@@ -28,8 +30,83 @@ Connection *connection_init() {
 
 void connection_free(Connection *c) {
 	connection_disconnect(c);
-
 	free(c);
+}
+
+int *connection_connect(Connection *c, char *host, char *port, int timeout) {
+	struct addrinfo hints;
+	struct addrinfo *result, *rp
+	int retval;
+	int sfd;
+
+	if(c == NULL) {
+		if(timeout <= 0)
+			return(-1);
+		c = connection_init(timeout);
+		if(c == NULL)
+			goto cerror0;
+	}
+
+	/* Obtain address(es) matching host/port */
+
+	memset(&hints, 0, sizeof(struct addrinfo));
+	hints.ai_family = AF_UNSPEC;    /* Allow IPv4 or IPv6 */
+	hints.ai_socktype = SOCK_STREAM; /* TCP socket */
+	hints.ai_flags = 0;
+	hints.ai_protocol = 0;          /* Any protocol */
+
+	retval = getaddrinfo(host, port, &hints, &result);
+	if (retval != 0) {
+		fprintf(stderr, "connection_connect(): getaddrinfo(): %s\n", gai_strerror(retval));
+		goto cerror0;
+	}
+
+	/* getaddrinfo() returns a list of address structures.
+	Try each address until we successfully connect(2).
+	If socket(2) (or connect(2)) fails, we (close the socket
+	and) try the next address. */
+
+	for (rp = result; rp != NULL; rp = rp->ai_next) {
+		sfd = socket(rp->ai_family, rp->ai_socktype,
+		rp->ai_protocol);
+		if (c->sock == -1)
+			continue;
+
+		if (connect(sfd, rp->ai_addr, rp->ai_addrlen) != -1)
+			break;                  /* Success */
+
+		close(sfd);
+	}
+
+	freeaddrinfo(result);           /* No longer needed */
+
+	if (rp == NULL) {               /* No address succeeded */
+		fprintf(stderr, "connection_connect(): Could not connect\n");
+		goto cerror0;
+	}
+
+	// Copy socket address info in to connection.
+	c->sock = sfd;
+	memcpy(&(c->address), rp->ai_addr, sizeof(struct sockaddr));
+
+	if (setsockopt(s->sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+		perror("connection_connect(): setsockopt()");
+		goto cerror1;
+	}
+
+	if(fd_nonblocking(s->sock))
+		goto cerror1;
+
+	// override timeout if greater than 0
+	if(timeout > 0)
+		c->timeout = timeout;
+
+	return(0);
+
+cerror1:
+	connection_disconnect(c);
+cerror0:
+	return(-1);
 }
 
 void connection_disconnect(Connection *c) {
@@ -47,7 +124,7 @@ Server *server_init(char *port, int max_users, int timeout) {
 	struct addrinfo *result, *rp; // first item, current item in linked list
 	int retval;
 	int i;
-	int yes = 1;
+	int yes = 1; // used for setsockopt
 
 	s = malloc(sizeof(Server));
 	if(s == NULL) {
@@ -57,7 +134,7 @@ Server *server_init(char *port, int max_users, int timeout) {
 
 	memset(&hints, 0, sizeof(struct addrinfo));
 	hints.ai_family = AF_UNSPEC;    /* Allow IPv4 or IPv6 */
-	hints.ai_socktype = SOCK_STREAM; /* Datagram socket */
+	hints.ai_socktype = SOCK_STREAM; /* TCP socket */
 	hints.ai_flags = AI_PASSIVE;    /* For wildcard IP address */
 	hints.ai_protocol = 0;          /* Any protocol */
 	hints.ai_canonname = NULL;
@@ -92,14 +169,14 @@ Server *server_init(char *port, int max_users, int timeout) {
 
 	if (setsockopt(s->sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
 		perror("server_init(): setsockopt()");
-		exit(1);
+		goto serror2
 	}
 
 	/* allocate memory for max connections */
 	s->connection = malloc(sizeof(Connection *) * max_users);
 	if(s->connection == NULL) {
 		fprintf(stderr, "server_init(): Couldn't allocate memory.\n");
-		goto serror3;
+		goto serror2;
 	}
 	for(i = 0; i < max_users; i++) {
 		s->connection[i] = connection_init();
@@ -135,7 +212,7 @@ serror4:
 serror3:
 	free(s->connection);
 serror2:
-	close(s->sock);
+	server_stop(s);
 serror1:
 	free(s);
 serror0:

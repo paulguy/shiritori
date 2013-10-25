@@ -18,7 +18,7 @@
 Server *s;
 void signalhandler(int signum);
 
-int main(int argc, char *argv[]) {
+int main(int argc, char **argv) {
 	char readbuf[MAX_READ + 1];
 	int running;
 	int retval;

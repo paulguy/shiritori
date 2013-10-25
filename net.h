@@ -26,9 +26,11 @@ typedef struct {
 /*
  * Initializes a new connection structure.
  *
+ * timeout	Set timeout for connection in seconds.
+ *
  * returns	New Connection structure or NULL on error.
  */
-Connection *connection_init();
+Connection *connection_init(int timeout);
 
 /*
  * Attempts to close and free a Connection structure.
@@ -36,6 +38,18 @@ Connection *connection_init();
  * c		Connection to free.
  */
 void connection_free(Connection *c);
+
+/*
+ * Attempts to initiate a connection to a server at host and port.  Optional timeout override.
+ *
+ * c		Connection to use for connection, if c points to NULL, allocate a new Connection; timeout must be set.
+ * host		Hostname or IP.
+ * port		Port or service to connect to.
+ * timeout	If greater than 0, change timeout in seconds.
+ *
+ * returns	0 on success, -1 on error.
+ */
+int *connection_connect(Connection *c, char *host, char *port, int timeout);
 
 /*
  * Disconnects a currently connected socket or does nothing if it's already disconnected.
