@@ -1,0 +1,30 @@
+╒═══════════════════════╕
+│   Network Shiritori   │ ┃
+╘═══════════════════════╛ ┃
+  ━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+Description
+═══════════
+Originally a Japanese game built around the Japanese language; this version will be generally made around English but should easily support other languages with Latin character sets for which dictionaries are available.
+
+Wikipedia's Description of the Original Game
+════════════════════════════════════════════
+Shiritori (しりとり) is a Japanese word game in which the players are required to say a word which begins with the final kana of the previous word. No distinction is made between hiragana, katakana or kanji. "Shiritori" literally means "taking the buttocks" or "taking the end".
+
+Basic Rules
+───────────
+* Two or more people take turns to play.
+* Only nouns are permitted.
+* A player who plays a word ending in the mora N (ん) loses the game, as no Japanese word begins with that character.
+* Words may not be repeated.
+* Phrases connected by no (の) are permitted, but only in those cases where the phrase is sufficiently fossilized to be considered a "word".
+
+Example: sakura (さくら) → rajio (ラジオ) → onigiri (おにぎり) → risu (りす) → sumou (すもう) → udon (うどん)
+
+The player who used the word udon lost this game.
+
+There are various optional and advanced rules, which must be agreed on before the game begins.
+
+How To Play This Version
+════════════════════════
+One player takes a turn and gives a word, then the next player has to provide another word whose first letter is the last letter of the previous word.
