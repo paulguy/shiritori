@@ -8,19 +8,27 @@
 #include <time.h>
 
 #include "net.h"
+#include "rawterm.h"
+
 #ifndef MAX_COMMAND
 #error MAX_COMMAND must be defined!
 #endif
 
-#define TIMEOUT (60)
+#define PRINT_ERROR(ARGS)	rawterm_set()			\
+							fprintf(stderr, ARGS)	\
+							rawterm_unset()
 
-Connection *c;
+#define TIMEOUT (60)
+#define PROMPT_LEN	(1024)
+
+int running;
 void signalhandler(int signum);
 
 int main(int argc, char **argv) {
+	Connection *c;
 	struct sigaction sa;
 	struct timespec idletime;
-	int retval, running;
+	int retval;
 	char outbuf[MAX_COMMAND];
 	char *cmdbuf;
 	char *databuf;
@@ -63,38 +71,44 @@ int main(int argc, char **argv) {
 	}
 	fprintf(stderr, "Successfully connected to %s(%s).\n", c->hostname, inet_ntoa(((struct sockaddr_in *)&(c->address))->sin_addr));
 
+	rawmode_init();
+	rawmode_set();
+
 	running = 1;
 	while(running) {
 		retval = connection_next_command(c);
 		if(retval == -1) { /* socket read error */
-			fprintf(stderr, "Error reading from socket, disconnected.\n");
+			PRINT_ERROR("Error reading from socket, disconnected.\n");
 			goto error2;
 		} else if(retval == 0) { /* full command received */
 			command = command_parse(&cmdbuf, &cmdlen, &databuf, &datalen, c->buf->cmd, c->buf->cmdhave);
 			switch(command) {
 				case -2:
 					connection_disconnect(c);
-					fprintf(stderr, "Unknown command received from server, disconnected.\n");
+					PRINT_ERROR("Unknown command received from server, disconnected.\n");
 					break;
 				case -1:
 					connection_disconnect(c);
-					fprintf(stderr, "Parse error from server, disconnected.\n");
+					PRINT_ERROR("Parse error from server, disconnected.\n");
 					break;
 				case CMD_ERROR:
-					fprintf(stderr, "A command from server has been dropped.\n");
+					PRINT_ERROR("A command from server has been dropped.\n");
 					break;
 				case CMD_PING:
-					fprintf(stderr, "Ping? ");
+					PRINT_ERROR("Ping? ");
 					if(connection_pong(c) == -1) {
-						fprintf(stderr, "Error!\n");
+						PRINT_ERROR("Error!\n");
 						connection_disconnect(c);
 					} else {
-						fprintf(stderr, "Pong!\n");
+						PRINT_ERROR("Pong!\n");
 					}
 					break;
 				case CMD_PONG:
 					c->pinged = 0;
-					fprintf(stderr, "Pong received from server.\n");
+					PRINT_ERROR("Pong received from server.\n");
+					break;
+				default:
+					PRINT_ERROR("Unimplemented command %s!\n", COMMANDS[command].name);
 			}
 			cmdbuffer_reset(c->buf);
 		}
@@ -102,18 +116,21 @@ int main(int argc, char **argv) {
 			if(connection_timeout_check(c, 0)) {
 				/* disconnect connection who hasn't responded or sent any data in a while */
 				connection_disconnect(c);
-				fprintf(stderr, "Server connection had no activity in %lu seconds, disconnected.\n", time(NULL) - c->last_message);
+				PRINT_ERROR("Server connection had no activity in %lu seconds, disconnected.\n", time(NULL) - c->last_message);
 			}
 		}
 		if(c->type == NOTCONNECTED) {
 			running = 0;
 		}
 
+		/* TODO command prompt */
+
 		idletime.tv_sec = 0;
 		idletime.tv_nsec = 1000000;
 		nanosleep(&idletime, NULL);
 	}
 
+	rawmode_uninit();
 	free(buf);
 	connection_free(c);
 	exit(EXIT_SUCCESS);
@@ -126,8 +143,10 @@ error0:
 	exit(EXIT_FAILURE);
 }
 
+/* TODO Buffered reader */
+
 void signalhandler(int signum) {
-	fprintf(stderr, "\n\nSignal %i received.\n", signum);
-	connection_free(c);
-	exit(EXIT_SUCCESS);
+	PRINT_ERROR("\n\nSignal %i received.\n", signum);
+	running = 0;
+	return;
 }

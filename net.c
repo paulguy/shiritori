@@ -17,8 +17,10 @@
 #error MAX_COMMAND must be defined!
 #endif
 
-const  Command COMMANDS[] = {{"PING",	4},
+const  Command COMMANDS[] = {{"MSG",	3},
+                             {"PING",	4},
                              {"PONG",	4},
+                             {"USER",	4},
                              {"ERROR",	5}};
 
 static char outbuf[MAX_COMMAND];
@@ -493,6 +495,19 @@ int connection_pong(Connection *c) {
 	int len;
 
 	len = command_generate(outbuf, MAX_COMMAND, COMMANDS[CMD_PONG].name, COMMANDS[CMD_PONG].length, NULL, 0);
+	if(len == -1)
+		return(-1);
+	if(connection_write(c, outbuf, len) == -1)
+		return(-1);
+
+	return(0);
+}
+
+int connection_message(Connection *c, char *msg) {
+	int len;
+
+	len = command_generate(outbuf, MAX_COMMAND, COMMANDS[CMD_MSG].name, COMMANDS[CMD_MSG].length, msg, strlen(msg));
+
 	if(len == -1)
 		return(-1);
 	if(connection_write(c, outbuf, len) == -1)

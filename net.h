@@ -39,10 +39,12 @@ typedef struct {
 } Command;
 
 extern const Command COMMANDS[];
-#define		CMD_PING		(0)
-#define		CMD_PONG		(1)
-#define		CMD_ERROR		(2)
-#define COMMANDS_MAX 		(3)
+#define		CMD_MSG			(0)
+#define		CMD_PING		(1)
+#define		CMD_PONG		(2)
+#define		CMD_USER		(3)
+#define		CMD_ERROR		(4)
+#define COMMANDS_MAX 		(5)
 #define COMMANDS_MAX_LEN	(5)
 
 /*
@@ -210,6 +212,16 @@ int connection_ping(Connection *c);
  * returns	0 on success, -1 on error.
  */
 int connection_pong(Connection *c);
+
+/*
+ * Send a message to a connection.
+ *
+ * c		Connection to message.
+ * msg		Message text.
+ *
+ * returns	0 on success, -1 on error.
+ */
+int connection_message(Connection *c, char *msg);
 
 /*
  * Reset CMDBuffer to initial state.

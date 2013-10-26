@@ -1,5 +1,5 @@
-COMMONOBJS	= net.o
-SERVEROBJS	= server_main.o
+COMMONOBJS	= net.o rawterm.o
+SERVEROBJS	= server_main.o game.o
 CLIENTOBJS	= main.o
 SERVER		= shiritori_server
 CLIENT		= shiritori

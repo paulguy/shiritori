@@ -15,17 +15,20 @@ VIRTUAL COMMANDS
 ----------------
 
 #	Length		Command			Purpose
-2	5			ERROR			A protocol error has occurred that caused a command to not be received.
+4	4			ERROR			A protocol error has occurred that caused a command to not be received.
 
-SERVER COMMANDS
----------------
-
-#	Length		Command			Purpose
-0	4			PING			Pings a client to check for their presence.
-
-CLIENT COMMANDS
----------------
+COMMANDS FROM SERVER
+--------------------
 
 #	Length		Command			Purpose
-1	4			PONG			Ignored by the server but sent by the client in response to PING to reset timeout.
+0	3			MSG				Message coming from user or global (name\0message or \0message for global)
+1	4			PING			Pings a client to check for their presence.
+
+COMMANDS FROM CLIENT
+--------------------
+
+#	Length		Command			Purpose
+0	3			MSG				Send message (name\0message or \0message for global)
+2	4			PONG			Ignored by the server but sent by the client in response to PING to reset timeout.
+3	4			USER			Specify/change username (name)
 

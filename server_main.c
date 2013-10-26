@@ -10,15 +10,22 @@
 #include <time.h>
 
 #include "net.h"
+#include "game.h"
+
+#ifndef MAX_COMMAND
+#error MAX_COMMAND must be defined!
+#endif
 
 #define MAX_USERS (8)
+#define MAX_NAME_LEN (32);
 #define TIMEOUT (60)
 
-Server *s;
+int running;
 void signalhandler(int signum);
 
 int main(int argc, char **argv) {
-	int running;
+	Game *g;
+	Server *s;
 	int retval;
 	int i;
 	struct sigaction sa;
@@ -55,9 +62,8 @@ int main(int argc, char **argv) {
 
 	/* We'll need command buffers, so initialize all of them */
 	bufs = malloc(sizeof(CMDBuffer *) * s->connections);
-	if(bufs == NULL) {
+	if(bufs == NULL)
 		goto error1;
-	}
 	for(i = 0; i < s->connections; i++) {
 		bufs[i] = cmdbuffer_init(MAX_COMMAND);
 		if(bufs[i] == NULL)
@@ -71,14 +77,22 @@ int main(int argc, char **argv) {
 		goto error2;
 	}
 
+	g = game_init(MAX_USERS, MAX_NAME_LEN);
+	if(g == NULL)
+		goto error3;
+
 	running = 1;
 	while(running) {
 		retval = connection_accept(s);
 		if(retval >= 0) {
 			fprintf(stderr, "New connection from %s.\n", inet_ntoa(((struct sockaddr_in *)&(s->connection[retval]->address))->sin_addr));
+			if(connection_message(s->connection[retval], "SERVER\0Connection established, please identify.") == -1) {
+				fprintf(stderr, "Failed to send message to %i.\n", i);
+				connection_disconnect(s->connection[i]);
+			}
 		} else if(retval == -1) {
 			fprintf(stderr, "Error accepting connection.\n");
-			goto error3;
+			goto error4;
 		}
 
 		for(i = 0; i < s->connections; i++) {
@@ -91,11 +105,19 @@ int main(int argc, char **argv) {
 					command = command_parse(&cmdbuf, &cmdlen, &databuf, &datalen, s->connection[i]->buf->cmd, s->connection[i]->buf->cmdhave);
 					switch(command) {
 						case -2:
-							connection_disconnect(s->connection[i]);
+							if(g->player[i]->c == s->connection[i]) {
+								player_disconnect(g->player[i]);
+							} else { /* not identified */
+								connection_disconnect(s->connection[i]);
+							}
 							fprintf(stderr, "Unknown command received from %i, disconnected.\n", i);
 							break;
 						case -1:
-							connection_disconnect(s->connection[i]);
+							if(g->player[i]->c == s->connection[i]) {
+								player_disconnect(g->player[i]);
+							} else { /* not identified */
+								connection_disconnect(s->connection[i]);
+							}
 							fprintf(stderr, "Parse error from %i, disconnected.\n", i);
 							break;
 						case CMD_ERROR:
@@ -104,7 +126,11 @@ int main(int argc, char **argv) {
 						case CMD_PING:
 							if(connection_pong(s->connection[i]) == -1) {
 								fprintf(stderr, "Failed to pong %i.\n", i);
-								connection_disconnect(s->connection[i]);
+								if(g->player[i]->c == s->connection[i]) {
+									player_disconnect(g->player[i]);
+								} else { /* not identified */
+									connection_disconnect(s->connection[i]);
+								}
 							} else {
 								fprintf(stderr, "Ponged %i.\n", i);
 							}
@@ -112,6 +138,22 @@ int main(int argc, char **argv) {
 						case CMD_PONG:
 							s->connection[i]->pinged = 0;
 							fprintf(stderr, "Pong received from %i.\n", i);
+						case CMD_USER:
+							databuf[datalen] = '\0';
+							if(datalen <= MAX_NAME_LEN || memcmp(databuf, "SERVER", 6) != 0) {
+								fprintf(stderr, "Connection %i username is now %s.\n", i, databuf);
+								g->player[i]->c = s->connection[i];
+								memcpy(g->player[i]->name, databuf, datalen + 1);
+							} else { /* username is too long or equals "SERVER" */
+								fprintf(stderr, "Connection %i specified invalid username %s.", i, databuf);
+								if(connection_message(s->connection[i], "SERVER\0Invalid username!") == -1) {
+									fprintf(stderr, "Failed to send message to %i.\n", i);
+									connection_disconnect(s->connection[i]);
+								}
+							}
+							break;
+						default:
+							fprintf(stderr, "Unimplemented command %s!\n", COMMANDS[command].name);
 					}
 					cmdbuffer_reset(s->connection[i]->buf);
 				}
@@ -126,7 +168,11 @@ int main(int argc, char **argv) {
 					/* ping the connection to create some activity and reset timeout timer */
 					if(connection_ping(s->connection[i]) == -1) {
 						fprintf(stderr, "Failed to ping %i.\n", i);
-						connection_disconnect(s->connection[i]);
+						if(g->player[i]->c == s->connection[i]) {
+							player_disconnect(g->player[i]);
+						} else { /* not identified */
+							connection_disconnect(s->connection[i]);
+						}
 					}
 					fprintf(stderr, "Pinged %i.\n", i);
 				}
@@ -138,12 +184,15 @@ int main(int argc, char **argv) {
 		nanosleep(&idletime, NULL);
 	}
 
+	game_free(g);
 	for(i = 0; i < s->connections; i++)
 		free(bufs[i]);
 	free(bufs);
 	server_free(s);
 	exit(EXIT_SUCCESS);
 
+error4:
+	game_free(g);
 error3:
 	for(i = 0; i < s->connections; i++)
 		free(bufs[i]);
@@ -157,6 +206,6 @@ error0:
 
 void signalhandler(int signum) {
 	fprintf(stderr, "\n\nSignal %i received.\n", signum);
-	server_free(s);
-	exit(EXIT_SUCCESS);
+	running = 0;
+	return;
 }

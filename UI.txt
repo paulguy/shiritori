@@ -1,0 +1,12 @@
+CLIENT				SERVER
+------				------
+connect				connection established
+
+PING				PONG
+PONG				PING
+
+USER				player structure created
+
+MSG					send message to global or user if identified
+display message		MSG
+
