@@ -1,15 +1,22 @@
-OBJS   = net.o server_main.o
-TARGET = shiritori_server
-CFLAGS = -pedantic -Wall -Wextra -std=gnu99 -ggdb
-#CFLAGS = -pedantic -Wall -Wextra -std=gnu99
-LDFLAGS = 
+COMMONOBJS	= net.o
+SERVEROBJS	= server_main.o
+CLIENTOBJS	= main.o
+SERVER		= shiritori_server
+CLIENT		= shiritori
 
-$(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $(TARGET) $(OBJS)
+CFLAGS		= -pedantic -Wall -Wextra -std=gnu99 -DMAX_COMMAND=\(1024\) -ggdb
+#CFLAGS		= -pedantic -Wall -Wextra -std=gnu99 -DMAX_COMMAND=\(1024\)
+LDFLAGS		= 
 
-all: $(TARGET)
+all:		$(SERVER) $(CLIENT)
+
+$(SERVER):	$(COMMONOBJS) $(SERVEROBJS)
+	$(CC) $(LDFLAGS) -o $(SERVER) $(SERVEROBJS) $(COMMONOBJS) 
+
+$(CLIENT):	$(COMMONOBJS) $(CLIENTOBJS)
+	$(CC) $(LDFLAGS) -o $(CLIENT) $(CLIENTOBJS) $(COMMONOBJS)
 
 clean:
-	rm -f $(TARGET) $(OBJS)
+	rm -f $(COMMONOBJS) $(SERVEROBJS) $(CLIENTOBJS) $(SERVER) $(CLIENT)
 
 .PHONY: clean

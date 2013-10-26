@@ -1,0 +1,31 @@
+COMMAND STRUCTURE
+-----------------
+
+Length				Description
+2					Length (required)
+1 to max - 2		Command (required)
+0 to max - cmd - 2	Data (optional)
+
+LLCCCC...[DDDD...]
+
+!!! COMMANDS SHOULD BE SORTED FROM SMALLEST TO LARGEST !!!
+!!! NO COMMAND NAME MAY BEGIN WITH THE NAME OF ANY OTHER COMMAND !!!
+
+VIRTUAL COMMANDS
+----------------
+
+#	Length		Command			Purpose
+2	5			ERROR			A protocol error has occurred that caused a command to not be received.
+
+SERVER COMMANDS
+---------------
+
+#	Length		Command			Purpose
+0	4			PING			Pings a client to check for their presence.
+
+CLIENT COMMANDS
+---------------
+
+#	Length		Command			Purpose
+1	4			PONG			Ignored by the server but sent by the client in response to PING to reset timeout.
+

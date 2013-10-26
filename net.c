@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/time.h>
 #include <netdb.h>
 #include <errno.h>
@@ -10,6 +12,16 @@
 #include <time.h>
 
 #include "net.h"
+
+#ifndef MAX_COMMAND
+#error MAX_COMMAND must be defined!
+#endif
+
+const  Command COMMANDS[] = {{"PING",	4},
+                             {"PONG",	4},
+                             {"ERROR",	5}};
+
+static char outbuf[MAX_COMMAND];
 
 Connection *connection_init(int timeout) {
 	Connection *c;
@@ -21,23 +33,32 @@ Connection *connection_init(int timeout) {
 	c->sock = 0;
 	c->type = NOTCONNECTED;
 	c->hostname = NULL;
+	c->buf = NULL;
 	c->timeout = timeout;
 	c->last_message = 0;
+	c->pinged = 0;
 	memset(&(c->address), 0, sizeof(struct sockaddr));
 
 	return(c);
 }
 
+void connection_add_buffer(Connection *c, CMDBuffer *b) {
+	c->buf = b;
+}
+
 void connection_free(Connection *c) {
 	connection_disconnect(c);
+	if(c->hostname != NULL)
+		free(c->hostname);
 	free(c);
 }
 
-int *connection_connect(Connection *c, char *host, char *port, int timeout) {
+int connection_connect(Connection *c, char *host, char *port, int timeout) {
 	struct addrinfo hints;
-	struct addrinfo *result, *rp
+	struct addrinfo *result, *rp;
 	int retval;
 	int sfd;
+	int yes = 1; // used for setsockopt
 
 	if(c == NULL) {
 		if(timeout <= 0)
@@ -89,17 +110,27 @@ int *connection_connect(Connection *c, char *host, char *port, int timeout) {
 	c->sock = sfd;
 	memcpy(&(c->address), rp->ai_addr, sizeof(struct sockaddr));
 
-	if (setsockopt(s->sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
+	if (setsockopt(c->sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
 		perror("connection_connect(): setsockopt()");
 		goto cerror1;
 	}
 
-	if(fd_nonblocking(s->sock))
+	if(fd_nonblocking(c->sock))
 		goto cerror1;
 
 	// override timeout if greater than 0
 	if(timeout > 0)
 		c->timeout = timeout;
+
+	c->type = SERVER;
+	if(c->hostname != NULL)
+		free(c->hostname);
+	c->hostname = malloc(strlen(host) + strlen(port) + 2);
+	memcpy(c->hostname, host, strlen(host));
+	c->hostname[strlen(host)] = ':';
+	memcpy(&(c->hostname[strlen(host) + 1]), port, strlen(port));
+	c->last_message = time(NULL);
+	c->pinged = 0;
 
 	return(0);
 
@@ -113,9 +144,11 @@ void connection_disconnect(Connection *c) {
 	/* Don't close stdin/out/err */
 	if(c->sock > 2) {
 		close(c->sock);
-		c->type = NOTCONNECTED;
-		c->sock = 0;
 	}
+	c->type = NOTCONNECTED;
+	c->sock = 0;
+	if(c->buf != NULL)
+		cmdbuffer_reset(c->buf);
 }
 
 Server *server_init(char *port, int max_users, int timeout) {
@@ -169,7 +202,7 @@ Server *server_init(char *port, int max_users, int timeout) {
 
 	if (setsockopt(s->sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) == -1) {
 		perror("server_init(): setsockopt()");
-		goto serror2
+		goto serror2;
 	}
 
 	/* allocate memory for max connections */
@@ -179,7 +212,7 @@ Server *server_init(char *port, int max_users, int timeout) {
 		goto serror2;
 	}
 	for(i = 0; i < max_users; i++) {
-		s->connection[i] = connection_init();
+		s->connection[i] = connection_init(timeout);
 		if(s->connection[i] == NULL)
 			break;
 	}
@@ -246,25 +279,14 @@ void server_close_all(Server *s) {
 }
 
 int connection_accept(Server *s) {
+	struct sockaddr address;
 	socklen_t addrlen;
 	int sock;
 	Connection *c;
 	int i;
 
-	for(i = 0; i < s->connections; i++) {
-		if(s->connection[i]->type == NOTCONNECTED) {
-			c = s->connection[i];
-			break;
-		}
-	}
-
-	if(i == s->connections) {
-		fprintf(stderr, "connection_accept(): Max connections reached.\n");
-		return(-1);
-	}
-
 	addrlen = sizeof(struct sockaddr);
-	sock = accept(s->sock, &(c->address), &addrlen);
+	sock = accept(s->sock, &address, &addrlen);
 	if(sock < 0) {
 		if(errno == EAGAIN || errno == EWOULDBLOCK)
 			return(-2);
@@ -274,10 +296,26 @@ int connection_accept(Server *s) {
 		}
 	}
 
+	for(i = 0; i < s->connections; i++) {
+		if(s->connection[i]->type == NOTCONNECTED) {
+			c = s->connection[i];
+			break;
+		}
+	}
+
+	if(i == s->connections) {
+		fprintf(stderr, "connection_accept(): New connection from %s, but max connections reached (%i).\n",
+		        inet_ntoa(((struct sockaddr_in *)&(address))->sin_addr), s->connections);
+		close(sock);
+		return(-3);
+	}
+
 	c->sock = sock;
+	memcpy(&(c->address), &address, addrlen);
 	c->type = CLIENT;
 	c->timeout = s->timeout;
 	c->last_message = time(NULL);
+	c->pinged = 0;
 
 	if(fd_nonblocking(c->sock)) {
 		fprintf(stderr, "connection_accept(): Couldn't make socket nonblocking.\n");
@@ -311,21 +349,14 @@ int connection_read(Connection *c, char *buf, int bytes) {
 	retval = read(c->sock, buf, bytes);
 
 	if(retval == 0) {
-		if(time(NULL) - c->last_message > c->timeout) {
-			connection_disconnect(c);
-			return(-2);
-		}
 		return(0);
 	} else if(retval > 0) {
 		c->last_message = time(NULL);
+		c->pinged = 0;
 		return(retval);
 	}
 	/* else */
 	if(errno == EAGAIN || errno == EWOULDBLOCK) {
-		if(time(NULL) - c->last_message > c->timeout) {
-			connection_disconnect(c);
-			return(-2);
-		}
 		return(0);
 	}
 
@@ -333,6 +364,189 @@ int connection_read(Connection *c, char *buf, int bytes) {
 	return(-1);
 }
 
-int connection_write(Connection *c, char *buf, int bytes) {
+int connection_write(Connection *c, const char *buf, const int bytes) {
 	return(write(c->sock, buf, bytes));
+}
+
+int connection_timeout_check(Connection *c, int timeout) {
+	if(timeout != 0) {
+		if(time(NULL) - c->last_message > timeout) {
+			return(-2);
+		}
+	} else {
+		if(time(NULL) - c->last_message > c->timeout) {
+			return(-2);
+		}
+	}
+
+	return(0);
+}
+
+CMDBuffer *cmdbuffer_init(int bsize) {
+	CMDBuffer *b;
+
+	b = malloc(sizeof(CMDBuffer));
+	if(b == NULL)
+		goto berror0;
+
+	b->cmd = malloc(bsize);
+	if(b->cmd == NULL)
+		goto berror1;
+
+	b->cmdsize = bsize;
+	cmdbuffer_reset(b);
+
+	return(b);
+
+berror1:
+	free(b);
+berror0:
+	return(NULL);
+}
+
+void cmdbuffer_free(CMDBuffer *b) {
+	free(b->cmd);
+	free(b);
+}
+
+static const char *protoerror = "\0\0ERROR";
+static const int protoerrorlen = 7;
+
+int connection_next_command(Connection *c) {
+	int retval;
+
+	if(c->buf == NULL)
+		return(-1);
+
+	if(c->buf->cmdsize < protoerrorlen) /* needs at least protoerrorlen bytes. unlikely but special use or misuse may cause this */
+		return(-1);
+
+	if(c->buf->cmdneeded == 0) { /* We don't know how much we need, yet. */
+		if(c->buf->cmdhave == 0) { /* We have nothing so we need 2 bytes */
+			retval = connection_read(c, c->buf->cmd, 2); /* Try to read 2 bytes */
+			if(retval == -1) /* error */
+				return(-1);
+			if(retval == 1) { /* only 1 bytes received, we need 1 more */
+				c->buf->cmdhave = 1;
+				return(1);
+			} else if(retval == 2) { /* we have all 2 bytes */
+				c->buf->cmdhave = 2;
+			} else { /* retval == 0, we didn't get anything */
+				return(2);
+			}
+		} else { /* cmdhave == 1, we still need 1 more */
+			retval = connection_read(c, &(c->buf->cmd[1]), 1);
+			if(retval == -1)
+				return(-1);
+			if(retval == 1) { /* we have all 2 bytes */
+				c->buf->cmdhave = 2;
+			} else { /* retval == 0, we didn't get anything, we still need 1 more */
+				return(1);
+			}
+		}
+		if(c->buf->cmdhave == 2) { /* Check if we have enough to know how much we need */
+			c->buf->cmdneeded = ntohs(*((unsigned short int *)(c->buf->cmd)));
+		}
+	} else { /* we know how much we need, so get it */
+		if(c->buf->cmdneeded > c->buf->cmdsize) { /* incoming command is too big, discard it */
+			retval = connection_read(c, c->buf->cmd, c->buf->cmdsize < c->buf->cmdneeded - c->buf->cmdhave ?
+				                                     c->buf->cmdsize : c->buf->cmdneeded - c->buf->cmdhave);
+			if(retval == -1) /* error */
+				return(-1);
+			c->buf->cmdhave += retval;
+			if(c->buf->cmdhave == c->buf->cmdneeded) { /* we've eaten the overly large command, report the error */
+				memcpy(c->buf->cmd, protoerror, protoerrorlen);
+				c->buf->cmdhave = protoerrorlen;
+				c->buf->cmdneeded = protoerrorlen;
+			}
+		} else { /* command will fit */
+			if(c->buf->cmdhave < c->buf->cmdneeded) { /* we need more data */
+				retval = connection_read(c, &(c->buf->cmd[c->buf->cmdhave]), c->buf->cmdneeded - c->buf->cmdhave);
+				if(retval == -1) /* error */
+					return(-1);
+				c->buf->cmdhave += retval;
+			}
+		}
+	}
+
+	if(c->buf->cmdhave < c->buf->cmdneeded) /* if we don't have enough, report how much we need. */
+		return(c->buf->cmdneeded - c->buf->cmdhave);
+
+	return(0); /* we have enough */
+}
+
+int connection_ping(Connection *c) {
+	int len;
+
+	len = command_generate(outbuf, MAX_COMMAND, COMMANDS[CMD_PING].name, COMMANDS[CMD_PING].length, NULL, 0);
+	if(len == -1)
+		return(-1);
+	if(connection_write(c, outbuf, len) == -1)
+		return(-1);
+
+	c->pinged = 1;
+
+	return(0);
+}
+
+int connection_pong(Connection *c) {
+	int len;
+
+	len = command_generate(outbuf, MAX_COMMAND, COMMANDS[CMD_PONG].name, COMMANDS[CMD_PONG].length, NULL, 0);
+	if(len == -1)
+		return(-1);
+	if(connection_write(c, outbuf, len) == -1)
+		return(-1);
+
+	return(0);
+}
+
+void cmdbuffer_reset(CMDBuffer *b) {
+	b->cmdneeded = 0;
+	b->cmdhave = 0;
+}
+
+int command_generate(char *buf, const unsigned short int bufsize, const char *cmd, const unsigned short int cmdsize, const char *data, unsigned short int datasize) {
+	int totalsize;
+
+	totalsize = cmdsize + datasize + 2;
+	if(totalsize > bufsize || totalsize > 65536)
+		return(-1);
+
+	*((unsigned short int *)buf) = htons(totalsize);
+	memcpy(&(buf[2]), cmd, cmdsize);
+	if(data != NULL)
+		memcpy(&(buf[2 + cmdsize]), data, datasize);
+
+	return(totalsize);
+}
+
+int command_parse(char **cmd, unsigned short int *cmdsize, char **data, unsigned short int *datasize, char *buf, unsigned short int bufsize) {
+	int i;
+	unsigned short int hdrsize;
+
+	if(bufsize < 2)
+		return(-1);
+	hdrsize = ntohs(*((unsigned short int *)buf));
+
+	if(bufsize < hdrsize) /* Preliminary size checks */
+		return(-1);
+
+	for(i = 0; i < COMMANDS_MAX; i++) {
+		if(bufsize < COMMANDS[i].length + 2)
+			return(-1);
+		if(memcmp(&(buf[2]), COMMANDS[i].name, COMMANDS[i].length) == 0) {
+			*cmd = &(buf[2]);
+			*cmdsize = COMMANDS[i].length;
+			*data = &(buf[2 + *cmdsize]);
+			*datasize = hdrsize - *cmdsize - 2;
+			return(i);
+		}
+	}
+
+	*cmd = &(buf[2]);
+	*cmdsize = hdrsize - 2;
+	*data = NULL;
+	*datasize = 0;
+	return(-2);
 }
