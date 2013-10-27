@@ -1,5 +1,7 @@
 //Mostly taken from GNU less's source code.  Probably only works in Linux and probably other unixes but not likely to work in Windows without something like Cygwin, and even then...
 
+#include <string.h>
+
 #include "rawterm.h"
 
 static struct termios save_term;

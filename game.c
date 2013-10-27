@@ -1,3 +1,5 @@
+#include <stdlib.h>
+
 #include "game.h"
 
 Player *player_init(int maxname) {
@@ -12,7 +14,7 @@ Player *player_init(int maxname) {
 		free(p);
 		return(NULL);
 	}
-	p->connection = NULL;
+	p->c = NULL;
 	p->maxname = maxname;
 
 	return(p);
@@ -24,7 +26,7 @@ void player_free(Player *p) {
 }
 
 void player_disconnect(Player *p) {
-	if(p->connection == NULL)
+	if(p->c == NULL)
 		return;
 
 	connection_disconnect(p->c);
@@ -36,7 +38,7 @@ Game *game_init(int maxplayers, int maxname) {
 	int i;
 
 	g = malloc(sizeof(Game));
-	if(g == NULL) {
+	if(g == NULL)
 		goto gerror0;
 
 	g->player = malloc(sizeof(Player *) * maxplayers);

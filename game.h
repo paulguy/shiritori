@@ -16,4 +16,10 @@ typedef struct {
 
 Player *player_init(int maxname);
 
+void player_free(Player *p);
+
+void player_disconnect(Player *p);
+
 Game *game_init(int maxplayers, int maxname);
+
+void game_free(Game *g);

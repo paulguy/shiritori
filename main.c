@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <time.h>
+#include <errno.h>
 
 #include "net.h"
 #include "rawterm.h"
@@ -14,14 +15,15 @@
 #error MAX_COMMAND must be defined!
 #endif
 
-#define PRINT_ERROR(ARGS)	rawterm_set()			\
-							fprintf(stderr, ARGS)	\
+#define PRINT_ERROR( ... )	rawterm_set();					\
+							fprintf(stderr, __VA_ARGS__);	\
 							rawterm_unset()
 
 #define TIMEOUT (60)
 #define PROMPT_LEN	(1024)
 
 int running;
+int userinput(char *buf, int bufsize, int curend);
 void signalhandler(int signum);
 
 int main(int argc, char **argv) {
@@ -35,6 +37,9 @@ int main(int argc, char **argv) {
 	int command;
 	short unsigned int cmdlen, datalen;
 	CMDBuffer *buf;
+
+	char prompt[PROMPT_LEN];
+	int curend;
 
 	if(argc != 3) {
 		fprintf(stderr, "Usage: %s <host> <port>\n", argv[0]);
@@ -71,9 +76,10 @@ int main(int argc, char **argv) {
 	}
 	fprintf(stderr, "Successfully connected to %s(%s).\n", c->hostname, inet_ntoa(((struct sockaddr_in *)&(c->address))->sin_addr));
 
-	rawmode_init();
-	rawmode_set();
+	rawterm_init();
+	rawterm_set();
 
+	curend = 0;
 	running = 1;
 	while(running) {
 		retval = connection_next_command(c);
@@ -123,14 +129,25 @@ int main(int argc, char **argv) {
 			running = 0;
 		}
 
-		/* TODO command prompt */
+		retval = userinput(prompt, PROMPT_LEN, curend);
+		if(retval == -1) {
+			PRINT_ERROR("Couldn't read from stdin.\n");
+			running = 0;
+		} else if(retval > 0) {
+			if(prompt[retval] == '\0') {
+				PRINT_ERROR("%s\n", prompt);
+				curend = 0;
+			} else {
+				curend = retval;
+			}
+		}
 
 		idletime.tv_sec = 0;
 		idletime.tv_nsec = 1000000;
 		nanosleep(&idletime, NULL);
 	}
 
-	rawmode_uninit();
+	rawterm_unset();
 	free(buf);
 	connection_free(c);
 	exit(EXIT_SUCCESS);
@@ -143,7 +160,31 @@ error0:
 	exit(EXIT_FAILURE);
 }
 
-/* TODO Buffered reader */
+int userinput(char *buf, int bufsize, int curend) {
+	char in;
+	int retval;
+
+	for(;;) {
+		retval = read(0, &in, 1);
+		if(retval == -1) {
+			if(errno == EAGAIN || errno == EWOULDBLOCK) {
+				break;
+			} else {
+				return(-1);
+			}
+		}
+
+		curend++;
+		if(curend == bufsize || in == '\n') {
+			buf[curend] = '\0';
+			break;
+		} else {
+			buf[curend] = in;
+		}
+	}
+
+	return(curend);
+}
 
 void signalhandler(int signum) {
 	PRINT_ERROR("\n\nSignal %i received.\n", signum);

@@ -1,3 +1,6 @@
+#ifndef __NET_H
+#define __NET_H
+
 #include <sys/socket.h>
 
 typedef enum {
@@ -257,3 +260,5 @@ int command_generate(char *buf, unsigned short int bufsize, const char *cmd, con
  * returns	Numerical command value on success, -1 on error.
  */
 int command_parse(char **cmd, unsigned short int *cmdsize, char **data, unsigned short int *datasize, char *buf, unsigned short int bufsize);
+
+#endif

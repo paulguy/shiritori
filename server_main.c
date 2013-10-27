@@ -17,7 +17,7 @@
 #endif
 
 #define MAX_USERS (8)
-#define MAX_NAME_LEN (32);
+#define MAX_NAME_LEN (32)
 #define TIMEOUT (60)
 
 int running;

@@ -9,6 +9,5 @@
 #include <errno.h>
 
 int rawterm_init();
-int rawterm_uninit();
-char rawterm_getch();
-int rawterm_printf(const char *format, ...);
+int rawterm_set();
+int rawterm_unset();
